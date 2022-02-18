@@ -33,14 +33,18 @@ class StaxAuth:
                 "Please provide a Secret Key to your config"
             )
 
+        hostname = kwargs.get("hostname")
+        if not hostname:
+            raise Exception("hostname not provided")
+
         id_token = self.id_token_from_cognito(username, password, **kwargs)
         id_creds = self.sts_from_cognito_identity_pool(id_token, **kwargs)
-        auth = self.sigv4_signed_auth_headers(id_creds)
+        auth = self.sigv4_signed_auth_headers(id_creds, hostname)
 
         StaxConfig.expiration = id_creds.get("Credentials").get("Expiration")
-        StaxConfig.auth = auth
+        StaxConfig.service_auths[hostname] = auth
 
-        return StaxConfig.auth
+        return StaxConfig.service_auths[hostname]
 
     def id_token_from_cognito(
         self, username=None, password=None, srp_client=None, **kwargs
@@ -116,12 +120,13 @@ class StaxAuth:
 
         return id_creds
 
-    def sigv4_signed_auth_headers(self, id_creds):
+    def sigv4_signed_auth_headers(self, id_creds, hostname):
         auth = AWSRequestsAuth(
             aws_access_key=id_creds.get("Credentials").get("AccessKeyId"),
             aws_secret_access_key=id_creds.get("Credentials").get("SecretKey"),
             aws_token=id_creds.get("Credentials").get("SessionToken"),
-            aws_host=f"{StaxConfig.hostname}",
+            aws_host=hostname,
+            # aws_host="api.idam.core.dev.juma.cloud",
             aws_region=self.aws_region,
             aws_service="execute-api",
         )
@@ -140,10 +145,16 @@ class RootAuth:
 class ApiTokenAuth:
     @staticmethod
     def requests_auth(username, password, **kwargs):
+        hostname = kwargs.get("hostname")
+        if not hostname:
+            raise Exception("unable to determine hostname")
+        # check service auth cache
+        auth = StaxConfig.service_auths.get(hostname)
+
         # Minimize the potentical for token to expire while still being used for auth (say within a lambda function)
-        if StaxConfig.expiration and StaxConfig.expiration - timedelta(
+        if auth and StaxConfig.expiration and StaxConfig.expiration - timedelta(
             minutes=int(environ.get("TOKEN_EXPIRY_THRESHOLD_IN_MINS", 1))
         ) > datetime.now(timezone.utc):
-            return StaxConfig.auth
+            return StaxConfig.service_auths.get(hostname)
 
         return StaxAuth("ApiAuth").requests_auth(username, password, **kwargs)

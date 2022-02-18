@@ -30,7 +30,7 @@ class Config:
     base_url = None
     hostname = f"api.{STAX_REGION}"
     org_id = None
-    auth = None
+    service_auths = dict()
     expiration = None
     load_live_schema = True
 
@@ -38,10 +38,12 @@ class Config:
     python_version = sysinfo.python_version()
     sdk_version = staxapp.__version__
 
+    service_api_endpoints = dict()
+
     @classmethod
     def set_config(cls):
         cls.base_url = f"https://{cls.hostname}/{cls.API_VERSION}"
-        config_url = f"{cls.api_base_url()}/public/config"
+        config_url = f"{cls.base_url}/public/config"
         config_response = requests.get(config_url)
         try:
             config_response.raise_for_status()
@@ -64,8 +66,17 @@ class Config:
         cls._initialized = True
 
     @classmethod
-    def api_base_url(cls):
-        return cls.base_url
+    def api_base_url(cls, service_name=None):
+        service = cls.service_api_endpoints.get(service_name)
+        if service:
+            return service.get("base_url")
+
+        # if no direct match, fallback to coreapi
+        core_api = cls.service_api_endpoints.get("coreapi")
+        if core_api:
+            return core_api.get("base_url")
+
+        raise Exception(f"unable to get base url for service: {service_name}")
 
     @classmethod
     def branch(cls):
@@ -74,6 +85,30 @@ class Config:
     @classmethod
     def schema_url(cls):
         return f"{cls.base_url}/public/api-document"
+
+    @classmethod
+    def api_endpoints(cls) -> list:
+        if len(cls.service_api_endpoints) > 0:
+            return list(cls.service_api_endpoints.values())
+
+        api_endpoints = dict()
+        api: dict = cls.api_config.get("API")
+        endpoints: list = api.get("endpoints")
+
+        for endpoint in endpoints:
+            api_base_url = endpoint.get("endpoint")
+            schema_url = f"{api_base_url}/public/api-document"
+            service_name = endpoint.get("name")
+            api_endpoints[service_name] = {
+                "service_name": service_name,
+                "region": endpoint.get("region"),
+                "base_url": api_base_url,
+                "schema_url": schema_url,
+            }
+
+        cls.service_api_endpoints = api_endpoints
+
+        return list(cls.service_api_endpoints.values())
 
     @classmethod
     def get_auth_class(cls):

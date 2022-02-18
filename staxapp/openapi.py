@@ -12,15 +12,14 @@ from staxapp.exceptions import ApiException, ValidationException
 
 class StaxClient:
     _operation_map = dict()
-    _schema = dict()
     _initialized = False
+    _service_schemas = dict()
 
     def __init__(self, classname, force=False):
         # Stax feature, eg 'quotas', 'workloads'
-        if force or not self._operation_map:
+        if force or not self._operation_map.get(classname):
             _operation_map = dict()
-            self._map_paths_to_operations()
-            StaxContract.set_schema(self._schema)
+            self._map_paths_to_operations(classname)
 
         if not self._operation_map.get(classname):
             raise ValidationException(
@@ -33,20 +32,34 @@ class StaxClient:
 
     @classmethod
     def _load_schema(cls):
-        if Config.load_live_schema:
-            schema_response = requests.get(Config.schema_url())
-            schema_response.raise_for_status()
-            cls._schema = schema_response.json()
-        else:
-            current_dir = os.path.abspath(os.path.dirname(__file__))
-            schema_file = f"{current_dir}/data/schema.json"
-            with open(schema_file, "r") as f:
-                cls._schema = json.load(f)
+        services = Config.api_endpoints()
+        for service in services:
+            schema_url = service.get("schema_url")
+            service_name = service.get("service_name")
+            if schema_url:
+                schema = requests.get(schema_url)
+                schema.raise_for_status()
+                schema_object = schema.json()
+                StaxContract.set_schema_for_service(service_name, schema_object)
+                cls._service_schemas[service_name] = schema_object
 
     @classmethod
-    def _map_paths_to_operations(cls):
+    def _get_service_schema(cls, classname):
+        schema = cls._service_schemas.get(classname)
+        if not schema:
+            return cls._service_schemas.get("coreapi")
+
+        return schema
+
+    @classmethod
+    def _map_paths_to_operations(cls, classname):
         cls._load_schema()
-        for path_name, path in cls._schema["paths"].items():
+
+        schema = cls._get_service_schema(classname)
+        if not schema:
+            raise Exception(f"api specification not loaded for service: {classname}")
+
+        for path_name, path in schema["paths"].items():
             parameters = []
 
             for part in path_name.split("/"):
@@ -57,7 +70,13 @@ class StaxClient:
                 method = path[method_type]
                 operation = method.get("operationId", "").split(".")
 
-                if len(operation) != 2:
+                if len(operation) == 2:
+                    api_class = operation[0]
+                    method_name = operation[1]
+                elif len(operation) == 1:
+                    api_class = classname
+                    method_name = operation[0]
+                else:
                     continue
 
                 parameter_path = {
@@ -66,8 +85,6 @@ class StaxClient:
                     "parameters": parameters,
                 }
 
-                api_class = operation[0]
-                method_name = operation[1]
                 if not cls._operation_map.get(api_class):
                     cls._operation_map[api_class] = dict()
                 if not cls._operation_map.get(api_class, {}).get(method_name):
@@ -107,8 +124,8 @@ class StaxClient:
                 raise ValidationException(
                     f"Missing one or more parameters: {operation_parameters[-1]}"
                 )
-            paramter_path = sorted_parameter_paths[parameter_index]
-            split_path = paramter_path["path"].split("/")
+            parameter_path = sorted_parameter_paths[parameter_index]
+            split_path = parameter_path["path"].split("/")
             path = ""
             for part in split_path:
                 if "{" in part:
@@ -116,10 +133,10 @@ class StaxClient:
                     path = f"{path}/{payload.pop(parameter)}"
                 else:
                     path = f"{path}/{part}"
-            if paramter_path["method"].lower() in ["put", "post"]:
+            if parameter_path["method"].lower() in ["put", "post"]:
                 # We only validate the payload for POST/PUT routes
-                StaxContract.validate(payload, method_name)
-            ret = getattr(Api, paramter_path["method"])(path, payload)
+                StaxContract.validate(self.classname, parameter_path["path"], parameter_path["method"].lower(), name, payload)
+            ret = getattr(Api, parameter_path["method"])(self.classname, path, payload)
             return ret
 
         return stax_wrapper

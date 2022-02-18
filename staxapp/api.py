@@ -1,4 +1,5 @@
 import json
+from urllib.parse import urlparse
 
 import requests
 
@@ -7,7 +8,7 @@ from staxapp.exceptions import ApiException
 
 
 class Api:
-    _requests_auth = None
+    _service_requests_auth = dict()
 
     @classmethod
     def _headers(cls, custom_headers) -> dict:
@@ -19,9 +20,10 @@ class Api:
 
     @classmethod
     def _auth(cls, **kwargs):
-        if not cls._requests_auth:
-            cls._requests_auth = Config.get_auth_class().requests_auth
-        return cls._requests_auth(Config.access_key, Config.secret_key, **kwargs)
+        hostname = kwargs.get("hostname")
+        if not cls.get_service_requests_auth(hostname):
+            cls._service_requests_auth[hostname] = Config.get_auth_class().requests_auth
+        return cls._service_requests_auth[hostname](Config.access_key, Config.secret_key, **kwargs)
 
     @staticmethod
     def handle_api_response(response):
@@ -31,13 +33,18 @@ class Api:
             raise ApiException(str(e), response)
 
     @classmethod
-    def get(cls, url_frag, params={}, **kwargs):
+    def get_service_requests_auth(cls, hostname):
+        cls._service_requests_auth.get(hostname)
+
+    @classmethod
+    def get(cls, service, url_frag, params={}, **kwargs):
         url_frag = url_frag.replace(f"/{Config.API_VERSION}", "")
-        url = f"{Config.api_base_url()}/{url_frag.lstrip('/')}"
+        url = f"{Config.api_base_url(service)}/{url_frag.lstrip('/')}"
+        hostname = urlparse(url).hostname
 
         response = requests.get(
             url,
-            auth=cls._auth(),
+            auth=cls._auth(hostname=hostname),
             params=params,
             headers=cls._headers(kwargs.get("headers", {})),
             **kwargs,
@@ -46,14 +53,15 @@ class Api:
         return response.json()
 
     @classmethod
-    def post(cls, url_frag, payload={}, **kwargs):
+    def post(cls, service, url_frag, payload={}, **kwargs):
         url_frag = url_frag.replace(f"/{Config.API_VERSION}", "")
-        url = f"{Config.api_base_url()}/{url_frag.lstrip('/')}"
+        url = f"{Config.api_base_url(service)}/{url_frag.lstrip('/')}"
+        hostname = urlparse(url).hostname
 
         response = requests.post(
             url,
             json=payload,
-            auth=cls._auth(),
+            auth=cls._auth(hostname=hostname),
             headers=cls._headers(kwargs.get("headers", {})),
             **kwargs,
         )
@@ -61,14 +69,15 @@ class Api:
         return response.json()
 
     @classmethod
-    def put(cls, url_frag, payload={}, **kwargs):
+    def put(cls, service, url_frag, payload={}, **kwargs):
         url_frag = url_frag.replace(f"/{Config.API_VERSION}", "")
-        url = f"{Config.api_base_url()}/{url_frag.lstrip('/')}"
+        url = f"{Config.api_base_url(service)}/{url_frag.lstrip('/')}"
+        hostname = urlparse(url).hostname
 
         response = requests.put(
             url,
             json=payload,
-            auth=cls._auth(),
+            auth=cls._auth(hostname=hostname),
             headers=cls._headers(kwargs.get("headers", {})),
             **kwargs,
         )
@@ -76,13 +85,14 @@ class Api:
         return response.json()
 
     @classmethod
-    def delete(cls, url_frag, params={}, **kwargs):
+    def delete(cls, service, url_frag, params={}, **kwargs):
         url_frag = url_frag.replace(f"/{Config.API_VERSION}", "")
-        url = f"{Config.api_base_url()}/{url_frag.lstrip('/')}"
+        url = f"{Config.api_base_url(service)}/{url_frag.lstrip('/')}"
+        hostname = urlparse(url).hostname
 
         response = requests.delete(
             url,
-            auth=cls._auth(),
+            auth=cls._auth(hostname=hostname),
             params=params,
             headers=cls._headers(kwargs.get("headers", {})),
             **kwargs,
